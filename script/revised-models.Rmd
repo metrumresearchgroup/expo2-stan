@@ -1,0 +1,618 @@
+---
+title: "Update Traceable Model"
+subtitle: > 
+  Example of copying and revising Stan models using <font class=mrgc>bbr.bayes</font>.
+image: bbr-strip.png
+order: 500
+categories: 
+- bbr
+- model management
+fig-cap-location: margin
+title-block-banner: "#16b1bf"
+title-block-banner-color: "white"
+toc: true
+toc-depth: 2
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE, 
+  cache = TRUE, 
+  autodep = TRUE, 
+  comment = '.', 
+  message = FALSE,
+  warning = FALSE
+)
+```
+
+
+# Introduction
+
+This page demonstrates the following `bbr` functionality:
+
+* Iterative model development
+* Annotation of models with tags, notes, etc.
+
+
+# Tools used
+
+<hr />
+
+## MetrumRG packages
+{{< var used.bbr >}}
+
+## CRAN packages
+{{< var used.dplyr >}}
+
+# Set up
+
+<hr />
+
+Load required packages and set file paths to your model and figure directories. 
+
+```{r}
+library(bbr)
+library(bbr.bayes)
+library(dplyr)
+library(here)
+library(tidyverse)
+library(yspec)
+library(tidyvpc)
+library(bayesplot)
+
+MODEL_DIR <- here("model", "stan","expo")
+FIGURE_DIR <- here("deliv", "figure","expo")
+```
+
+```{r, echo=FALSE}
+
+bayesplot::color_scheme_set('viridis')
+theme_set(theme_bw())
+
+# Source some useful functions
+source(here("script", "functions-model.R"))
+
+# define model dir and load tags
+TAGS <- yaml::read_yaml(here("script", "tags.yaml"))
+
+```
+
+```{r, eval = TRUE, echo=FALSE, include = FALSE}
+#Source helper functions for stepping through the rmd files 
+source(here::here("script", "functions-rmd-helpers.R"))
+
+#models needed for this script
+models <- c("mod0")
+
+for (i in 1:length(models)){
+  mod_i <- check_model(file.path(MODEL_DIR, models[i]))
+}
+
+```
+
+
+```{r, eval=TRUE, echo=FALSE, message=FALSE}
+exdata3 <- read_csv(here('data','derived','exdata3.csv'), na='.')
+```
+
+```{r, eval=TRUE, echo=FALSE, message=FALSE}
+head(exdata3)
+```
+
+```{r, eval=TRUE, echo=FALSE, message=FALSE}
+spec <- load_spec(here('data','derived','exdata3.yml'))
+exdata3 <- ys_add_factors(exdata3, spec)
+ind_exdata3 <- distinct(exdata3, ID, .keep_all = TRUE)
+
+labs <- ys_get_short_unit(spec)
+```
+
+# Model creation and submission
+
+
+```{r, eval = TRUE}
+mod0 <- read_model(file.path(MODEL_DIR, 'mod0'))
+```
+
+
+# Revised model - correlated random effects
+
+The marginal PPCs describing the relationships between response, exposure, and time look adequate. However, the model does not capture the within-subject response to treatment. There is a consistent and moderately strong, negative correlation, while the base model assumes that there are no associations. To address this, we'll add correlation between subject-level effects on E0 and EC50
+
+We'll use the `copy_model` function  to generate a new model based on the base model.
+
+#Use caution when using the `.overwrite= TRUE` argument in `new_model` and `copy_model_from`. It will overwrite existing files and output directory, if they exist.  
+
+
+```{r, eval = TRUE}
+mod1 <- copy_model_from(mod0, 
+                        .new_model = 'mod1',
+                        .overwrite = TRUE)
+```
+
+This will copy the key files from `mod0` to `mod1`.
+
+```{r}
+list.files(path=file.path(MODEL_DIR,'mod1'))
+```
+
+```{r eval = TRUE, include= FALSE}
+#this code reverts model files in expo folder back to what they were before `copy_model` or `new_model` was run. 
+revert_model(.mod = "mod1",
+             .expo_model_dir = here::here("model", "stan", "expo"),
+             .demo_model_dir = here::here("model", "stan", "demo")
+             )
+```
+
+We'll revise the Stan model code to include the correlated random effects. We'll open the Stan model file and edit it to have the code shown below.
+
+```{r, eval = TRUE}
+open_stanmod_file(mod1)
+```
+
+
+For this new model structure, we'll need slightly different initial values:
+
+```{r, eval = TRUE}
+open_staninit_file(mod1)
+```
+
+
+However, the data file doesn't change, so we don't need to make any modifications to the `mod1-standata.R` file.
+
+Let's add a description and tags and then submit the model.
+
+```{r}
+mod1 <- mod1 %>% 
+  replace_description('Add correlation between subject-specific e0 and ec50')
+mod1 <- mod1 %>% 
+  add_tags(.tags = c(TAGS$eta_e0,TAGS$eta_ec50, TAGS$eta_cor))
+```
+
+```{r, eval = TRUE}
+fit1 <- submit_model(mod1)
+```
+
+
+```{r}
+fit1$cmdstan_diagnose()
+```
+
+We see some warnings about low E-BFMI and a parameter with a high split R-hat. These indicate that we probably want to consider an alternative parameterization.
+
+Before we do that, let's look at the parameter table and diagnostic plots.
+
+```{r}
+mod1_params <- c('tv_e0','tv_log_ec50','emax','gamma',
+                 'omega_sds','Omega_corr[1,2]')
+fit1$summary(variables=mod1_params)
+```
+
+While the split R-hat values look good for most of the parameters, the R-hat values for `omega_sds[2]` (the interindividual standard deviation for E0) indicates that the chains are not mixing well for that parameter.  Let's look at the trace plots.
+
+```{r, out.width='100%'}
+bayesplot::mcmc_trace(fit1$draws(variables=mod1_params))
+```
+
+```{r}
+bayesplot::mcmc_dens_overlay(fit1$draws(variables=mod1_params))
+```
+
+These tell us the same story as the R-hat values: the chains aren't mixed well for the interindividual standard deviation on e0. Let's add a note to this effect then modify the parameterization of the model.
+
+```{r}
+mod1 <- mod1 %>% add_notes("Poor mixing for omega_sds[2], the between-subject standard deviation on e0.  Try reparameterizing the model.")
+```
+
+
+# Revised model - fully non-centered parameterization
+
+
+Let's try using a fully non-centered parameterization to see if that helps with the convergence issues.
+
+#Use caution when using the `.overwrite= TRUE` argument in `new_model` and `copy_model_from`. It will overwrite existing files and output directory, if they exist.  
+
+
+```{r eval = TRUE}
+mod2 <- copy_model_from(mod1, 
+                        .new_model = 'mod2', 
+                        .inherit_tags = TRUE,
+                        .overwrite = TRUE)
+```
+
+
+```{r eval = TRUE, include= FALSE}
+#this code reverts model files in expo folder back to what they were before `copy_model` or `new_model` was run. 
+revert_model(.mod = "mod2",
+             .expo_model_dir = here::here("model", "stan", "expo"),
+             .demo_model_dir = here::here("model", "stan", "demo")
+             )
+```
+
+We'll revise the Stan model code to include the correlated random effects. We'll open the Stan model file and edit it to have the code shown below.
+
+```{r, eval = TRUE}
+open_stanmod_file(mod2)
+```
+
+We can compare two model files using the `model_diff` command. By default, the model is compared to the model on which it was based (in this case, `mod1`).
+
+```{r comment = ""}
+model_diff(mod2)
+```
+
+For this new model structure, we'll need slightly different initial values:
+
+```{r, eval = TRUE}
+open_staninit_file(mod2)
+```
+
+We can also use `model_diff` to compare initial value and other types of model files:
+
+```{r comment = ""}
+model_diff(mod2, .file='init')
+```
+
+However, the data file doesn't change, so we don't need to make any modifications to the `mod1-standata.R` file.
+
+Let's add a short description, tags, and then submit the model.
+
+
+```{r}
+mod2 <- mod2 %>% replace_description("Fully non-centered parameterization with correlated random effects.")
+
+mod2 <- mod2 %>% add_tags(TAGS$NCP)
+```
+
+```{r, eval = TRUE}
+fit2 <- submit_model(mod2)
+```
+
+
+```{r}
+fit2$cmdstan_diagnose()
+```
+
+
+It looks like the re-parameterization has addressed all of the issues with convergence.  
+Let's confirm by looking at the parameter table and diagnostic plots.
+
+```{r}
+mod2_params <- c('tv_e0','tv_log_ec50','emax','gamma',
+                 'omega_sds','Omega_corr[1,2]')
+fit2$summary(variables=mod2_params)
+```
+
+All of the the split R-hat values look good and the ESS bulk and tail values are reasonably large. Let's look at the trace plots.
+
+```{r}
+bayesplot::mcmc_trace(fit2$draws(variables=mod2_params))
+```
+
+```{r}
+bayesplot::mcmc_dens_overlay(fit2$draws(variables=mod2_params))
+```
+
+The trace and density plots look good, particularly for `omega_sds[2]`.  We'll add notes to this effect.
+
+```{r}
+mod2 <- mod2 %>% add_notes("Reparameterization fixed the mixing problem for omega_sds[2].  All Rhat values look good.")
+```
+
+
+
+Finally, let's see if this model has improved the predictive check for the correlation with the baseline value.
+
+
+##  Model evaluation - Posterior Predictive Checks
+
+In order to help generate the plots more quickly, we'll use a subset of 500 posterior samples. In practice, we would use all of the posterior samples.
+
+* FXa inhibition vs Concentration (median, fifth, 95th percentiles)
+
+```{r}
+ppc <- tidybayes::spread_draws(fit2, 
+                               simdv_obs[num], 
+                               simdv_new[num],
+                               ndraws = 500,
+                               seed = 9753)
+ppc2 <- left_join(ppc, exdata3 %>% mutate(num=1:n()))
+```
+
+```{r}
+head(ppc)
+```
+
+```{r}
+vpc_conc <- observed(exdata3, x=cobs, y=fxa.inh) %>% 
+  simulated(ppc2 %>% arrange(.draw,num), y=simdv_new) %>% 
+  stratify(~dose) %>% 
+  binning(bin='jenks', nbins=10) %>% 
+  vpcstats()
+```
+
+```{r}
+plot(vpc_conc, legend.position = 'right')
+
+```
+
+* FXa inhibition vs time by dose (median, fifth, 95th percentiles)
+
+Because the samples were obtained at a fixed grid of times, we'll use the nominal times as our binning variable.
+
+
+```{r}
+vpc_time <- observed(exdata3, x=time, y=fxa.inh) %>% 
+  simulated(ppc2 %>% arrange(.draw,num), y=simdv_new) %>% 
+  stratify(~dose) %>% 
+  binning(bin=time) %>% 
+  vpcstats()
+```
+
+```{r}
+plot(vpc_time, legend.position = 'right')
+```
+
+* Correlation between baseline and post-baseline FXa inhibition
+
+```{r}
+sim_correlations <- ppc2 %>% 
+  ungroup() %>% 
+  filter(time > 0) %>% 
+  left_join(ppc2 %>% 
+              filter(time==0) %>% 
+              ungroup() %>% 
+              select(.draw,ID, bsl=simdv_new)) %>% 
+  group_by(.draw,dose,time) %>% 
+  summarise(cor=cor(bsl,simdv_new),
+            cfb = mean(simdv_new -bsl)) %>% 
+  group_by(dose,time) %>% 
+  summarize(median=median(cor),
+           qlo = quantile(cor, prob=0.05),
+           qhi = quantile(cor, prob=0.95),
+           median_cfb=median(cfb),
+           qlo_cfb = quantile(cfb, prob=0.05),
+           qhi_cfb = quantile(cfb, prob=0.95))
+
+obs_correlations <- exdata3 %>% 
+  ungroup() %>% 
+  filter(time > 0) %>% 
+  left_join(exdata3 %>% 
+              filter(time==0) %>% 
+              ungroup() %>% 
+              select(ID, bsl=fxa.inh)) %>% 
+  group_by(dose,time) %>% 
+  summarise(cor=cor(bsl,fxa.inh), cfb=mean(fxa.inh-bsl))
+```
+
+
+```{r}
+sim_correlations %>% 
+  ggplot(aes(x=factor(time), y=median)) +
+  geom_pointrange(aes(ymin=qlo, ymax=qhi)) +
+  geom_point(data=obs_correlations, aes(y=cor), col='red')
+```
+
+The problem with the correlation is still there. Nonetheless, we'll move forward to add covariate effects into the model.
+
+
+# Revised model - add covariates
+
+```{r}
+ind_params <- tidybayes::spread_draws(fit2, ec50[id], e0[id])
+
+```
+
+
+```{r}
+ind_params2 <- ind_params %>% 
+  group_by(id) %>% 
+  summarise(log_ec50 = median(log(ec50)), 
+            e0 = median(e0))
+
+ind_params3 <- left_join(ind_params2, ind_exdata3, by=c('id'='ID'))
+
+ind_params4 <- ind_params3 %>% 
+  pivot_longer(cols=c(log_ec50,e0))
+
+```
+
+```{r}
+ind_params4 %>% 
+  ggplot(aes(x=factor(dose), y=value)) +
+  geom_boxplot() +
+  facet_wrap(~name, scales='free') +
+  labs(x=labs$dose,
+       y = 'Individual Parameter Value')
+```
+
+```{r}
+ind_params4 %>% 
+  ggplot(aes(x=sex_f, y=value)) +
+  geom_boxplot() +
+  facet_wrap(~name, scales = 'free') +
+  labs(x=labs$sex_f,
+       y='Individual Parameter Value')
+
+```
+```{r}
+ind_params4 %>% 
+  ggplot(aes(x=weight, y=value)) +
+  geom_point() +
+  geom_smooth( method='loess' ) +
+  facet_wrap(~name, scales = 'free') +
+  labs(x=labs$weight, y='Individual Parameter Value')
+```
+
+```{r}
+ind_params4 %>% 
+  ggplot(aes(x=age, y=value)) +
+  geom_point() +
+  geom_smooth( method='loess' ) +
+  facet_wrap(~name, scales = 'free') +
+  labs(x=labs$age, y = 'Individual Parameter Value')
+```
+
+Let's consider adding sex as a covariate effect on both the baseline FXa inhibition and the EC50.  
+
+#Use caution when using the `.overwrite= TRUE` argument in `new_model` and `copy_model_from`. It will overwrite existing files and output directory, if they exist.  
+
+
+
+```{r eval = TRUE}
+mod4 <- copy_model_from(mod2, 
+                        .new_model = 'mod4', 
+                        .inherit_tags = TRUE, 
+                        .overwrite = TRUE)
+```
+
+```{r eval = TRUE, include= FALSE}
+#this code reverts model files in expo folder back to what they were before `copy_model` or `new_model` was run. 
+revert_model(.mod = "mod4",
+             .expo_model_dir = here::here("model", "stan", "expo"),
+             .demo_model_dir = here::here("model", "stan", "demo")
+             )
+```
+
+```{r, eval = TRUE}
+open_stanmod_file(mod4)
+```
+
+
+
+For this new model structure, we'll need slightly different initial values:
+
+```{r, eval = TRUE}
+open_staninit_file(mod4)
+```
+
+
+And we need to update the data to pass in the covariate matrices and number of covariates.
+
+```{r, eval = TRUE}
+open_standata_file(mod4)
+```
+
+
+Before submitting the model, we'll add the model description.
+
+```{r}
+mod4 <- mod4 %>% replace_description("Add effect of sex on E0 and EC50.")
+```
+
+
+```{r, eval = TRUE}
+fit4 <- submit_model(mod4)
+```
+
+
+
+```{r}
+fit4$cmdstan_diagnose()
+```
+
+
+It looks like the sampler for the covariate model seems to have converged.
+Let's confirm by looking at the parameter table and diagnostic plots.
+
+```{r}
+mod4_params <- c('tv_e0','tv_log_ec50','emax','gamma', 
+                 'beta_e0','beta_log_ec50', 'omega_sds',
+                 'Omega_corr[1,2]')
+fit4$summary(variables=mod4_params) %>% 
+  mutate(across(-variable, pmtables::sig))
+```
+
+All of the the split R-hat values look good and the ESS bulk and tail values are reasonably large. Let's look at the trace plots.
+
+```{r}
+bayesplot::mcmc_trace(fit4$draws(variables=mod4_params))
+```
+
+```{r}
+bayesplot::mcmc_dens_overlay(fit4$draws(variables=mod4_params))
+```
+
+Finally, let's see if this model has improved the predictive check for the correlation with the baseline value.
+
+
+##  Model evaluation - Posterior Predictive Checks
+
+```{r}
+ppc <- tidybayes::spread_draws(fit4, 
+                               simdv_obs[num], 
+                               simdv_new[num],
+                               ndraws = 500,
+                               seed = 9753)
+ppc2 <- left_join(ppc, exdata3 %>% mutate(num=1:n()))
+```
+
+```{r}
+head(ppc)
+```
+
+* Association between FXa inhibition and concentration, stratified by sex
+
+Based on the posterior predictive check, it looks like the model adequately describes the effect of sex.
+
+```{r}
+vpc_conc <- observed(exdata3, x=cobs, y=fxa.inh) %>% 
+  simulated(ppc2 %>% arrange(.draw,num), y=simdv_new) %>% 
+  stratify(~sex_f) %>% 
+  binning(bin='jenks', nbins=10) %>% 
+  vpcstats()
+```
+
+```{r}
+plot(vpc_conc, legend.position = 'right')
+```
+
+* Correlation between baseline and post-baseline FXa inhibition
+
+Based on the posterior predictive check below, the model appears to adequately capture the association between baseline and post-baseline FXa values.
+
+```{r}
+sim_correlations <- ppc2 %>% 
+  ungroup() %>% 
+  filter(time > 0) %>% 
+  left_join(ppc2 %>% 
+              filter(time==0) %>% 
+              ungroup() %>% 
+              select(.draw,ID, bsl=simdv_new)) %>% 
+  group_by(.draw,dose,time) %>% 
+  summarise(cor=cor(bsl,simdv_new),
+            cfb = mean(simdv_new -bsl)) %>% 
+  group_by(dose,time) %>% 
+  summarize(median=median(cor),
+           qlo = quantile(cor, prob=0.05),
+           qhi = quantile(cor, prob=0.95),
+           median_cfb=median(cfb),
+           qlo_cfb = quantile(cfb, prob=0.05),
+           qhi_cfb = quantile(cfb, prob=0.95))
+
+obs_correlations <- exdata3 %>% 
+  ungroup() %>% 
+  filter(time > 0) %>% 
+  left_join(exdata3 %>% 
+              filter(time==0) %>% 
+              ungroup() %>% 
+              select(ID, bsl=fxa.inh)) %>% 
+  group_by(dose,time) %>% 
+  summarise(cor=cor(bsl,fxa.inh), cfb=mean(fxa.inh-bsl))
+```
+
+
+```{r}
+sim_correlations %>% 
+  ggplot(aes(x=factor(time), y=median)) +
+  geom_pointrange(aes(ymin=qlo, ymax=qhi)) +
+  geom_point(data=obs_correlations, aes(y=cor), col='red') +
+  facet_wrap(~dose)
+```
+
+# Other resources
+ <hr /> 
+ 
+The following script from the {{< var stan_expo_repo.main >}} is discussed on this page. If you're interested running this code, visit the {{< var pages.about_the_repo >}} page first.
+
+Update Traceable Model script: {{< var stan_expo_repo.revised_models >}} 

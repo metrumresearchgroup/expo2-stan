@@ -1,0 +1,327 @@
+---
+title: "Generated Quantities Models"
+subtitle: > 
+  Example generated quantities model workflow with <font class=mrgc>bbr.bayes</font>.
+image: bbr-strip.png
+order: 500
+categories: 
+- bbr
+- model management
+fig-cap-location: margin
+toc: true
+toc-depth: 2
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE, 
+  cache = TRUE, 
+  autodep = TRUE, 
+  comment = '.', 
+  message = FALSE,
+  warning = FALSE,
+  out.width = 500, 
+  out.height = 750
+)
+```
+
+
+# Introduction
+
+There are often situations where you
+want to use your posterior samples as input to subsequent calculations.  In some cases, this is easily done in R.  In others, it can be convenient to perform the calculations in Stan.  
+
+To save the time associated with re-running the Stan MCMC sampler, `cmdstan` has implemented a `generate_quantities` method.  `bbr.bayes` is designed to take advantage of this method, and this chapter provides an example of using it.
+
+For more information about the `generate_quantities` method, see the sections describing stand-alone generated quantities models in the quick-start portion of the {{< var ref.cmdstan-gq >}} and the {{< var ref.stan-gq >}}.
+
+# Tools used
+
+<hr />
+
+## MetrumRG packages
+{{< var used.bbr >}}
+
+## CRAN packages
+{{< var used.dplyr >}}
+
+
+# Set up
+
+<hr />
+
+Load required packages and set file paths to your model and figure directories. 
+
+```{r}
+library(bbr)
+library(bbr.bayes)
+library(dplyr)
+library(here)
+library(tidyverse)
+library(yspec)
+library(loo)
+
+MODEL_DIR <- here("model", "stan","expo")
+FIGURE_DIR <- here("deliv", "figure","expo")
+```
+
+```{r, echo=FALSE}
+
+bayesplot::color_scheme_set('viridis')
+theme_set(theme_bw())
+
+# Source some useful functions
+source(here("script", "functions-model.R"))
+
+# define model dir and load tags
+TAGS <- yaml::read_yaml(here("script", "tags.yaml"))
+
+```
+
+```{r, eval = TRUE, echo=FALSE, include = FALSE}
+#Source helper functions for stepping through the rmd files 
+source(here::here("script", "functions-rmd-helpers.R"))
+
+#models needed for this script
+models <- c("mod0", "mod2", "mod4")
+
+for (i in 1:length(models)){
+  mod_i <- check_model(file.path(MODEL_DIR, models[i]))
+}
+
+```
+
+# Model creation and submission
+
+
+# Comparing models using ELPD
+
+In Bayesian analysis, a commonly used metric for comparing models is the expected log predictive density (ELPD). Without a hold-out sample, ELPD is typically calculated using an approximate leave one out (LOO) cross-validation estimate <insert citation>.  To calculate LOO-ELPD, we need to derive the log-likelihood contribution for each independent unit. For our analysis, this corresponds to the likelihood at the subject level.
+
+For non-linear mixed effect models, such as the one we're using here, the log-likelihood is not available in a closed-form solution. So, we will derive it using a Monte Carlo approximation. Specifically, we want to calculate
+
+$$
+\log \ell_i(\boldsymbol{\theta},\boldsymbol{\Omega} ~|~ \mathbf{y}_i) = \log \left( \int f(\mathbf{y}_i ~|~ \boldsymbol{\theta}, \boldsymbol{\Omega}, \boldsymbol{\eta}) ~f(\boldsymbol{\eta} ~|~ \boldsymbol{\Omega}) ~ d\boldsymbol{\eta} \right)
+$$
+The Monte Carlo approximation to the integral is derived as:
+
+\begin{align*}
+\ell_i(\boldsymbol{\theta},\boldsymbol{\Omega} ~|~ \mathbf{y}_i) &= \int \prod_{j=1}^{n_i} f(y_{ij} ~|~ \boldsymbol{\theta}, \boldsymbol{\Omega}, \boldsymbol{\eta}) ~f(\boldsymbol{\eta} ~|~ \boldsymbol{\Omega}) ~ d\boldsymbol{\eta} \\
+ & \approx \frac{1}{M} \sum_{m=1}^M \prod_{j=1}^{n_i} f(y_{ij} ~|~ \boldsymbol{\theta}, \boldsymbol{\Omega}, \boldsymbol{\eta}^{(m)}) ~f(\boldsymbol{\eta}^{(m)} ~|~ \boldsymbol{\Omega}) \\
+ & = \frac{1}{M} \sum_{m=1}^M \exp \left( \sum_{j=1}^{n_i} \log f(y_{ij} ~|~ \boldsymbol{\theta}, \boldsymbol{\Omega}, \boldsymbol{\eta}^{(m)}) + \log f(\boldsymbol{\eta}^{(m)} ~|~ \boldsymbol{\Omega}) \right)
+ \end{align*}
+ 
+ Thus, the approximation to $\log \ell_i(\boldsymbol{\theta},\boldsymbol{\Omega} ~|~ \mathbf{y}_i)$ is given by
+ 
+ \begin{align*}
+\log \ell_i(\boldsymbol{\theta},\boldsymbol{\Omega} ~|~ \mathbf{y}_i) & \approx \log(\sum_{m=1}^M \exp(A_i)) - \log M \\
+ & = \text{log\_sum\_exp}(A_i) - \log M
+\end{align*}
+
+where $M$ is the number of Monte Carlo samples, $\eta^{(m)}$ is a draw from the distribution $f(\boldsymbol{\eta} ~|~ \boldsymbol{\Omega})$, `log_sum_exp` corresponding to the Stan function of the same name and
+
+$$
+A_i = \sum_{j=1}^{n_i} \log f(y_{ij} ~|~ \boldsymbol{\theta}, \boldsymbol{\Omega}, \boldsymbol{\eta}^{(m)}) + \log f(\boldsymbol{\eta}^{(m)} ~|~ \boldsymbol{\Omega})
+$$
+
+To calculate the LOO-ELPD for our models, we will take advantage of the ability in `cmdstan` to run a stand-alone `generate quantities` model -- a model which takes as input the samples from a previous model and implements calculations through the `generated quantities` block. This can be an efficient approach to performing calculations with previously fitted models.
+
+We'll demonstrate the process in detail with `mod0`. Let's start by re-reading the parent model.
+
+```{r}
+mod0 <- read_model(file.path(MODEL_DIR,'mod0'))
+```
+
+Now, we'll use the `copy_model_as_stan_gq()` function to make a copy of `mod0` but for use as a `generated_quantities` model.
+
+#Use caution when using the `.overwrite= TRUE` argument in `new_model` and `copy_model_from`. It will overwrite existing files and output directory, if they exist.  
+
+
+```{r eval = TRUE}
+mod0_gq <- copy_model_as_stan_gq(.parent_mod = mod0, 
+                                 .new_model = 'mod0_gq', 
+                                 .overwrite = TRUE)
+```
+```{r eval = TRUE, include= FALSE}
+#this code reverts model files in expo folder back to what they were before `copy_model` or `new_model` was run. 
+revert_model(.mod = "mod0_gq",
+             .expo_model_dir = here::here("model", "stan", "expo"),
+             .demo_model_dir = here::here("model", "stan", "demo")
+             )
+```
+
+Next, we'll edit the Stan model file to make the following edits:
+
+* Remove the `model` block
+* Replace the original `generated quantities` block (which simulated data from the model for the purpose of model evaluation) with code to approximate the log-likelihood.
+* Add a variable denoting the number of Monte Carlo samples (`n_sim`) to the `data` block and to the input data
+
+(Note: removing the `model` block is not necessary; we have done this for the sake of clarity.  If it is left in the code, Stan will ignore it.)
+
+```{r, eval = TRUE}
+open_stanmod_file(mod0_gq)
+```
+
+The resulting code will look something like this:
+
+
+Next, we need to add `n_sim` to the data file. For a balance of reproducibility and speed, we'll set `n_sim=1000`.
+
+```{r, eval = TRUE}
+open_standata_file(mod0_gq)
+```
+
+The resulting data will look something like this:
+
+
+Let's make sure to run the chains in parallel.
+
+```{r}
+set_stanargs(mod0_gq,  .stanargs = list(parallel_chains=4))
+```
+
+
+Finally, we'll run the model. Note that this is pulling in the MCMC samples from `mod0` and running them through the `generated quantities` block of model `mod0_gq`. No additional sampling is happening.
+
+```{r, eval = TRUE}
+fit0_gq <- submit_model(mod0_gq)
+```
+
+
+We can pass the output from this fit to the `loo` function to calculate the approximate expected log predictive density (ELPD).
+
+```{r}
+loo0 <- loo(fit0_gq$draws(variable='log_like_approx'))
+
+loo0
+```
+
+
+We'll run through the same process for models 2 and 4.
+
+## ELPD for model 2
+
+```{r}
+mod2 <- read_model(file.path(MODEL_DIR,'mod2'))
+```
+
+#Use caution when using the `.overwrite= TRUE` argument in `new_model` and `copy_model_from`. It will overwrite existing files and output directory, if they exist.  
+
+
+```{r eval = TRUE}
+mod2_gq <- copy_model_as_stan_gq(.parent_mod = mod2, 
+                                 .new_model = 'mod2_gq',
+                                 .overwrite = TRUE)
+```
+
+```{r eval = TRUE, include= FALSE}
+#this code reverts model files in expo folder back to what they were before `copy_model` or `new_model` was run. 
+revert_model(.mod = "mod2_gq",
+             .expo_model_dir = here::here("model", "stan", "expo"),
+             .demo_model_dir = here::here("model", "stan", "demo")
+             )
+```
+
+Next, we'll edit the Stan model file to make the following edits:
+
+* Add `n_sim` to the `data` block
+* Remove the `model` block
+* Replace the original `generated quantities` block (which simulated from the model) with code to approximate the log-likelihood.
+
+```{r, eval = TRUE}
+open_stanmod_file(mod2_gq)
+```
+
+The resulting code will look something like this:
+
+
+Next, we'll make the same edits to the data file (add `n_sim=1000`) and set the Stan arguments to run the chains in parallel.
+
+```{r}
+set_stanargs(mod2_gq,  .stanargs = list(parallel_chains=4))
+```
+
+
+Finally, we'll run the model.  
+
+```{r, eval = TRUE}
+fit2_gq <- submit_model(mod2_gq)
+```
+
+
+```{r}
+loo2 <- loo(fit2_gq$draws(variable='log_like_approx'))
+
+loo2
+```
+
+## ELPD for model 4
+
+
+```{r}
+mod4 <- read_model(file.path(MODEL_DIR,'mod4'))
+```
+
+#Use caution when using the `.overwrite= TRUE` argument in `new_model` and `copy_model_from`. It will overwrite existing files and output directory, if they exist.  
+
+
+```{r eval = TRUE}
+mod4_gq <- copy_model_as_stan_gq(.parent_mod = mod4, 
+                                 .new_model = 'mod4_gq', 
+                                 .overwrite=TRUE)
+```
+
+```{r eval = TRUE, include= FALSE}
+#this code reverts model files in expo folder back to what they were before `copy_model` or `new_model` was run. 
+revert_model(.mod = "mod4_gq",
+             .expo_model_dir = here::here("model", "stan", "expo"),
+             .demo_model_dir = here::here("model", "stan", "demo")
+             )
+```
+
+```{r, eval = TRUE}
+open_stanmod_file(mod4_gq)
+```
+
+The resulting code will look something like this:
+
+
+Next, we make the edits to the Stan data and arguments and run the model.
+
+```{r, eval = TRUE}
+open_standata_file(mod4_gq)
+```
+
+```{r}
+set_stanargs(mod4_gq,  .stanargs = list(parallel_chains=4))
+```
+
+```{r, eval = TRUE}
+fit4_gq <- submit_model(mod4_gq)
+```
+
+
+
+```{r}
+loo4 <- loo(fit4_gq$draws(variable='log_like_approx'))
+
+loo4
+```
+
+## Model comparison
+
+Let's compare the model fits based on ELPD:
+
+```{r}
+loo_compare(loo0, loo2, loo4)
+```
+
+Based on this measure of model fit, it looks like models 2 ("model2" in the loo output) and 4 (model3 in the loo output) are comparable and both are preferred to model 0 (model1 in the loo output).
+
+
+# Other resources
+ <hr /> 
+ 
+The following script from the {{< var stan_expo_repo.main >}} is discussed on this page. If you're interested running this code, visit the {{< var pages.about_the_repo >}} page first.
+
+Generated Quantities Models script: {{< var stan_expo_repo.generated_quantities >}} 

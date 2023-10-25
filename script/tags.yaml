@@ -1,0 +1,31 @@
+# NOTE: this is only to demonstrate how to set up this file.
+# We recommend using this as a template for defining your own
+# tags to suit your project.
+
+
+#################
+# Stan
+#################
+
+# model structure
+CP: "centered parameterization"
+NCP: "non-centered parameterization"
+
+# Emmax model types
+Emax3: "3 Parameter (hyperbolic) Emax model"
+Emax4: "4 Parameter (sigmoidal) Emax model"
+
+
+# random effects
+eta_ec50: "ETA-EC50"
+eta_e0: "ETA-E0"
+eta_cor: "Correlated random effects"
+
+# covariates
+
+# error structure
+lognormal_ruv: "lognormal RUV"
+proportional_ruv: "proportional RUV"
+additive_ruv: "additive RUV"
+combined_ruv: "combined RUV"
+

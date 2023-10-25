@@ -1,0 +1,167 @@
+---
+title: "MCMC diagnostics report"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    depth: 2
+params:
+  mod: NULL # bbr-Stan model
+  pars: NULL # character vector of parameter names to plot
+  n_per_page: 4
+  np: NULL
+  myTheme: !r theme(text = element_text(size = 12), axis.text = element_text(size = 10))
+  include_plots: TRUE
+  include_code: FALSE
+  run_mrggsave: FALSE
+  fig_dir: !r here::here("deliv", "figure")
+---
+
+# Purpose
+
+Collection of MCMC diagnostics displayed as a HTML file.
+
+
+```{r setup_params, echo = FALSE}
+library(bbr)
+library(bbr.bayes)
+library(posterior)
+source(here::here("script", "mcmc-diagnostic-functions.R"))
+
+.posterior <- as_draws(params$mod)
+modelName <- get_model_id(params$mod)
+
+n_per_page <- params$n_per_page
+np <- params$np
+myTheme <- params$myTheme
+
+# subset to requested params
+pars <- params$pars
+.posterior <- .posterior[, , pars]
+diags <- summarize_draws(.posterior, "rhat", "ess_bulk", "ess_tail")
+
+nSamp <- dim(.posterior)[1]
+nChains <- dim(.posterior)[2]
+
+```
+
+
+
+```{r makeDir_mrggsave, echo = FALSE, eval = params$run_mrggsave}
+library(mrggsave)
+thisFigDir <- file.path(params$fig_dir, modelName)
+if(!file.exists(thisFigDir)) dir.create(thisFigDir)
+### set mrggsave figure directory here and tell R whether you want the pdf,
+## the png or both (e.g.,  mrggsave.dev = "pdf,png")
+options(
+  mrggsave.dir = thisFigDir, 
+  mrg.script = "mcmc-diagnostics.Rmd",
+  mrggsave.dev = "png"
+)
+```
+
+```{r print_model_object, echo = FALSE, results = "asis"}
+cat("## ", modelName)
+check_up_to_date(params$mod)
+params$mod
+```
+
+
+# rhat
+
+```{r echo = params$include_code}
+rhats <- diags$rhat
+names(rhats) <- diags$variable
+rhat_plot <- mcmc_rhat(rhats) + yaxis_text() + myTheme
+```
+```{r eval = params$include_plots, include = params$include_plots, echo = F, message = FALSE}
+# show plot in HTML output
+rhat_plot
+```
+
+```{r save_rhat_plot, include = FALSE, eval = params$run_mrggsave, message = FALSE}
+# save plots to disk
+mrggsave(rhat_plot, 
+         stem = "{modelName}-rhat")
+```
+
+# ESS
+
+```{r echo = params$include_code}
+ess_bulk <- diags$ess_bulk
+names(ess_bulk) <- diags$variable
+ess_bulk_ratios <- ess_bulk / (nSamp * nChains)
+ess_bulk_plot <- mcmc_neff(ess_bulk_ratios) + yaxis_text() + myTheme +
+  labs(title = "Bulk ESS ratios")
+```
+```{r eval = params$include_plots, include = params$include_plots, echo = F, message = FALSE}
+# show plot in HTML output
+ess_bulk_plot
+```
+
+```{r echo = params$include_code}
+ess_tail <- diags$ess_tail
+names(ess_tail) <- diags$variable
+ess_tail_ratios <- ess_tail / (nSamp * nChains)
+ess_tail_plot <- mcmc_neff(ess_tail_ratios) + yaxis_text() + myTheme +
+  labs(title = "Tail ESS ratios")
+```
+```{r eval = params$include_plots, include = params$include_plots, echo = F, message = FALSE}
+# show plot in HTML output
+ess_tail_plot
+```
+
+```{r save_ess_plots, include = FALSE, eval = params$run_mrggsave, message = FALSE}
+mrggsave(ess_bulk_plot, 
+         stem = "{modelName}-ess-bulk")
+mrggsave(ess_tail_plot, 
+         stem = "{modelName}-ess-tail")
+```
+
+# History plots
+
+```{r echo = params$include_code}
+mcmc_history_plots <- mcmc_history(.posterior, pars = pars, 
+                                   nParPerPage = n_per_page, myTheme = myTheme, np = np)
+```                                   
+```{r eval = params$include_plots, include = params$include_plots, echo = F, message = FALSE}
+# show plot in HTML output
+mcmc_history_plots
+```
+
+```{r save_history_plots, include = FALSE, eval = params$run_mrggsave, message = FALSE}
+mrggsave(mcmc_history_plots, 
+         stem = "{modelName}-mcmc-history", 
+         width = 5, height = 7)
+```
+
+# Density plots
+
+```{r echo = params$include_code}
+mcmc_density_chain_plots <- mcmc_density(.posterior, pars = pars, 
+                                         nParPerPage = n_per_page, byChain = TRUE, 
+                                         myTheme = myTheme)
+```
+```{r eval = params$include_plots, include = params$include_plots, echo = F, message = FALSE}
+# show plot in HTML output
+mcmc_density_chain_plots
+```
+
+```{r echo = params$include_code}
+mcmc_density_plots <- mcmc_density(.posterior, pars = pars, 
+                                   nParPerPage = n_per_page, 
+                                   myTheme = myTheme)
+```
+```{r eval = params$include_plots, include = params$include_plots, echo = F, message = FALSE}
+# show plot in HTML output
+mcmc_density_plots
+```
+
+```{r save_density_plots, include = FALSE, eval = params$run_mrggsave, message = FALSE}
+mrggsave(mcmc_density_chain_plots, 
+         stem = "{modelName}-density-chain", 
+         width = 5, height = 7)
+mrggsave(mcmc_density_plots, 
+         stem = "{modelName}-density", 
+         width = 5, height = 7)
+```

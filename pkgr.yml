@@ -1,0 +1,30 @@
+Version: 1
+Packages:
+  - bayesplot
+  - bbr.bayes
+  - here
+  - hexbin
+  - igraph
+  - loo
+  - magick
+  - mrggsave
+  - pdftools
+  - pmtables
+  - tidybayes
+  - tidyverse
+  - tidyvpc
+  - yspec
+
+Repos:
+  - MPN: https://mpn.metworx.com/snapshots/stable/2023-09-19
+
+Customizations:
+  Packages:
+    - bbr.bayes:
+        Suggests: true
+    - bbr:
+        Suggests: true
+
+Lockfile:
+    Type: renv
+Rpath: ${R_EXE_4_1}

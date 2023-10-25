@@ -1,0 +1,10 @@
+model_type: stan
+based_on:
+- mod1
+notes:
+- Model 1 with fully non-centered parameterization.
+- Reparameterization fixed the mixing problem for omega_sds[2].  All Rhat values look
+  good.
+description: Fully non-centered parameterization with correlated random effects.
+tags:
+- non-centered parameterization

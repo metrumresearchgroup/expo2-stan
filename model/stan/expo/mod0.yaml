@@ -1,0 +1,11 @@
+model_type: stan
+description: Base model with non-centered parameterization.
+notes:
+- Sigmoidal Emax function of dose.  No covariates. No IIV.
+- Additive residual error.
+- Model does not capture within subject relationship between baseline and post-baseline
+  observations.
+- Initial assessment of convergence based on R-hat looks good.
+tags:
+- non-centered parameterization
+- 4 Parameter (sigmoidal) Emax model

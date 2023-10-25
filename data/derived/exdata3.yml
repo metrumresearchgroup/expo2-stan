@@ -1,0 +1,39 @@
+SETUP__:
+    description: Example Factor Xa inhibition data
+    sponsor: example-project
+    projectnumber: examp201F
+    use_internal_db: true
+    character_last: true
+    comment_col: "C"
+    glue: 
+      super2: "$^2$"
+    flags:
+      covariate: [age, weight, sex]
+      ContCov: [age, weight]
+      CatCov: [sex]
+
+ID:
+  short: Subject ID
+weight:
+  short: Body weight
+  unit: kg
+age:
+  short: Age
+  unit: year
+sex:
+  short: Sex
+  values: [1, 2]
+  decode: [Male, Female]
+  decode.lc: [male, female]
+time:
+  short: Time
+  unit: hours
+dose:
+  short: Dose
+  unit: mg
+cobs:
+  short: Concentration
+  unit: ng/mL
+fxa.inh:
+  short: FXa Inhibition
+  unit: percent

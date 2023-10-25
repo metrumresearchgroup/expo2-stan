@@ -1,0 +1,332 @@
+---
+title: "Initial Model"
+subtitle: > 
+  Example model submission workflow with <font class=mrgc>bbr.bayes</font>.
+image: bbr-strip.png
+order: 500
+categories: 
+- bbr
+- model management
+fig-cap-location: margin
+title-block-banner: "#16b1bf"
+title-block-banner-color: "white"
+toc: true
+toc-depth: 2
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE, 
+  cache = TRUE, 
+  autodep = TRUE, 
+  comment = '.', 
+  message = FALSE,
+  warning = FALSE,
+  out.width = 500, 
+  out.height = 750
+)
+```
+
+
+# Introduction
+
+Managing the model development process in a traceable and reproducible manner can be a significant challenge. At MetrumRG, we use `bbr` and `bbr.bayes` to streamline this process for fitting Bayesian models. This Expo will demonstrate an example workflow for fitting models using Stan.
+
+`bbr` and `bbr.bayes` are R packages developed by MetrumRG that serve three primary purposes:
+
+* Submit models, particularly for execution in parallel and/or on a high-performance compute (HPC) cluster (e.g. {{< var pages.about_metworx >}}).
+* Parse model outputs into R objects to facilitate model evaluation and diagnostics in R.
+* Annotate the model development process for easy and reliable traceability and reproducibility.
+
+This page demonstrates the following `bbr` and `bbr.bayes` functionality:
+
+* Creating and submitting an initial model
+
+
+
+# Tools used
+
+<hr />
+
+## MetrumRG packages
+{{< var used.bbr >}}
+{{< var used.bbrbayes >}}
+
+## CRAN packages
+{{< var used.dplyr >}}
+
+# Outline
+
+<hr />
+
+This page details a range of tasks frequently performed throughout the modeling process such as defining, submitting, and annotating models. Typically, our scientists run this code in a scratch pad style script, since it isn't necessary for the entire coding history for each model to persist. Here, the code used each step of the process is provided as a reference, and a runnable version of this page is available in our GitHub repository:  {{< var stan_expo_repo.init_model_submission >}}. 
+
+If you're a new `bbr` user, we recommend you read through the {{< var pkg_resource.bbrbayes_getting_started >}} before trying to run any code. This vignette includes some setup and configuration requirement (e.g., making sure `bbr` can find your `cmdstan` installation). 
+
+Please note that **`bbr` doesn't edit the model structure in your Stan code.** This page walks through a sequence of models that might evolve during a simple modeling project. All modifications to the Stan code are made directly by the modeler. Below, we've included comments asking you to edit your Stan code manually. 
+
+After working through this content, we recommend reading the {{< var pages.model_summary_stan >}} page and accompanying {{< var stan_expo_repo.modeling_summary >}} file. The purpose of the {{< var stan_expo_repo.modeling_summary >}} is to provide a high-level overview of the project's current status. Also, we show how to leverage the model annotation to summarize your modeling work, specifically, how to create model run logs using `bbr::run_log()` and `bbr.bayes::stan_add_summary()` to summarize key features of each model (including the descriptions, notes, and tag fields) and provide suggestions for model notes that capture _key decision points_ in the modeling process. 
+
+# Set up
+
+<hr />
+
+Load required packages and set file paths to your model and figure directories. 
+
+```{r}
+library(bbr)
+library(bbr.bayes)
+library(dplyr)
+library(here)
+library(tidyverse)
+library(yspec)
+library(tidyvpc)
+library(bayesplot)
+library(loo)
+
+MODEL_DIR <- here("model", "stan","expo")
+FIGURE_DIR <- here("deliv", "figure","expo")
+```
+
+```{r, echo=FALSE}
+
+bayesplot::color_scheme_set('viridis')
+theme_set(theme_bw())
+
+# Source some useful functions
+source(here("script", "functions-model.R"))
+
+# define model dir and load tags
+TAGS <- yaml::read_yaml(here("script", "tags.yaml"))
+
+```
+
+
+# Model creation and submission
+
+<hr />
+
+## Initial Stan model file
+
+Before using `bbr`, you'll need to have a Stan model file describing your first model. We'll name our first model file `mod0.stan`. Note that this initial model must be saved in whatever location is defined as `MODEL_DIR` and additionally embedded within a subdirectory with the same name as the stan model, `mod0` in this case. In the typical MRG file structure used here, `MODEL_DIR` is `model/stan/`, meaning the full path to the initial model is `model/stan/mod0/`.
+
+The Stan code below implements a non-centered version of this model and includes a `generated quantities` block to simulate data for posterior predictive checks.
+
+```{r comment = "", warning = FALSE, echo=FALSE}
+cat(readLines(file.path(MODEL_DIR, "mod0", "mod0.stan")), sep = "\n")
+```
+
+
+
+## Create a model object
+
+After creating your initial Stan model file, the first step in using `bbr.bayes` is to create a model object. This model object is passed to all of the other `bbr` functions that submit, summarize, or manipulate models. You can read more about the model object and the function that creates it, `bbr::new_model()`, in the [_Create model object_ section of the "Getting Started" vignette](https://metrumresearchgroup.github.io/bbr/articles/getting-started.html#create-model-object). 
+
+Let's create our first model object. Note that for Stan models we need to include the `.model_type='stan'` argument: 
+
+#Use caution when using the `.overwrite= TRUE` argument in `new_model` and `copy_model_from`. It will overwrite existing files and output directory, if they exist.   
+
+
+```{r, eval = TRUE}
+mod0 <- new_model(file.path(MODEL_DIR, 'mod0'), 
+                  .model_type = 'stan',
+                  .overwrite = TRUE)
+```
+
+```{r eval = TRUE, include= FALSE}
+#Source helper functions for stepping through the rmd files 
+source(here::here("script", "functions-rmd-helpers.R"))
+
+#this code reverts model files in expo folder back to what they were before `copy_model` or `new_model` was run. 
+revert_model(.mod = "mod0",
+             .expo_model_dir = here::here("model", "stan", "expo"),
+             .demo_model_dir = here::here("model", "stan", "demo")
+             )
+```
+
+The first argument to `new_model()` is the path to your model Stan model file _without the file extension_. The call above assumes you have a Stan model file `mod0.stan` in the `MODEL_DIR/mod0` directory. 
+
+Prior to creating your model object with `new_model()`, your model directory had one directory (`mod0`) with one file (`mod0/mod0.stan`).
+
+
+The `new_model()` function creates the set of files necessary for running a Stan model using `bbr.bayes.` First, the `mod0.yaml` file is created in your model directory; this file automatically persists any tags, notes, and other model metadata. While it's useful to know that this YAML file exists, you shouldn't need to interact with it directly (e.g., in the RStudio file tabs). Instead, `bbr` has a variety of functions (i.e., `add_tags()` and `add_notes()` shown below) that work with the model object to edit the information in the YAML file from your R console. 
+
+
+Second, templates for the  `mod0-standata.R`, `mod0-init.R`, and `mod0-stanargs.R` files are created in the `mod0` directory. Additionally, if no `<run>.stan` file is detected, `bbr.bayes` will create a template model for you. The roles of these files are likely self-evident from their names, but a bit more information about their inputs and outputs is provided below:
+
+* `<run>.stan` is a file containing the Stan model code.
+
+* `<run>-standata.R`  constructs a function returning a Stan-ready data object which is then passed to the `CmdStanModel$sample()` call. You can use the `build_data()` function to view the data object created by the function.
+
+* `<run>-stanargs.R` constructs a named list with all of the arguments that will be passed to the `CmdStanModel$sample()` call. See `set_stanargs()` for details on modifying.
+
+* `<run>-init.R` is a file which contains all necessary R code to create the initial values passed to the `CmdStanModel$sample()` call. 
+
+
+### Customizing the model object files
+
+We can interact with each of these files using the associated `open_<filetype>_file` function.  
+
+First, let's edit the `mod0-standata.R` file. Recall, the source data file (`exdata3.csv`) looks like this:
+
+```{r, echo=FALSE}
+exdata3 <- read_csv(here('data','derived','exdata3.csv'), na='.')
+```
+
+```{r}
+head(exdata3)
+```
+
+```{r}
+spec <- load_spec(here('data','derived','exdata3.yml'))
+exdata3 <- ys_add_factors(exdata3, spec)
+ind_exdata3 <- distinct(exdata3, ID, .keep_all = TRUE)
+
+labs <- ys_get_short_unit(spec)
+```
+
+To edit the `mod0-standata.R` file, we can use the `open_standata_file()` function:
+
+```{r, eval = TRUE}
+open_standata_file(mod0)
+```
+
+We manually edit this file to have the contents we want. For this model, the code looks like this:
+
+
+This R file must create a function named `make_standata()` which takes the input to the directory where the file is located and returns a list suitable for use with Stan.
+
+Similarly, we can open the file defining how we want the initial values generated.
+
+
+```{r, eval = TRUE}
+open_staninit_file(mod0)
+```
+
+We manually edit this file to have the contents we want. For this model, the code looks like this:
+
+
+Lastly, we set the arguments for running the sampler. The only required argument is a random seed (for reproducibility). Other arguments, such as the number of cores, chains, warm-up iterations, adapt_delta parameter, etc., are optional. See the help file for `cmdstanr::sample` for a list of possible options.
+
+```{r}
+set_stanargs(mod0, 
+             list(seed=9753, 
+                  parallel_chains=4, 
+                  iter_warmup=1000, 
+                  iter_sampling=1000,
+                  adapt_delta=0.85 )
+)
+```
+
+This results in the file `mod0-stanargs.R` file having the following contents:
+
+```{r, echo=FALSE}
+cat(readLines(build_path_from_model(mod0,'-stanargs.R')), sep = "\n")
+```
+## Annotating your model
+
+<hr />
+
+`bbr` has some great features that allow you to easily annotate your models. This helps you document your modeling process as you go and can be easily retrieved later for creating "run logs" that describe the entire analysis (shown later). 
+
+A well-annotated model development process does several important things:
+
+* Makes it easy to update collaborators on the state of the project.
+* Supports reproducibility and traceability of your results.
+* Keeps the project organized in case you need to return to it at a later date.
+
+The `bbr` model object contains three annotation fields. The `description` is a character scalar (i.e., a single string), while `notes` and `tags` can contain character vectors of any length. These fields can be used for any purpose; however, we recommend some patterns below that work for us. These three fields can also be added to the model object at any time (before or after submitting the model). 
+
+### Using `description`
+
+Descriptions are typically brief; for example, "Base model" or "First covariate model". The `description` field defaults to `NULL` if no description is provided. One benefit of this approach is that you can easily filter your run logs to the notable models using `dplyr::filter(!is.null(description))`.
+
+We'll add a description denoting `mod0` as the base model with a non-centered parameterization.
+
+```{r}
+mod0 <- mod0 %>% replace_description("Base model with non-centered parameterization.")
+```
+
+
+### Using `notes`
+
+Notes are often used for free text observations about a particular model. Some modelers leverage notes as "official" annotations that might get pulled into a run log for a final report of some kind, while other modelers prefer to keep them informal and use them primarily for their own reference.
+
+
+## Using `tags`
+
+In contrast to the `description` and `notes` fields, [`tags`](https://metrumresearchgroup.github.io/bbr/reference/modify_tags.html) can be used to document your modeling work in a more structured way. 
+
+While `bbr` accepts a character vector for all tag-related arguments and functions, we highly recommend defining a glossary of tags that can be used throughout the model development. Importantly, this glossary allows you to define a consistent series of tags, and it can be modified and added throughout the course of the project. Tags become useless if they are inconsistently used; for example, if sometimes you use `"Emax model"` and other times you use `"EMAX model"`, then you can't easily identify all models with that structure. The use of an external glossary prevents this. This Expo repository contains a `tags.yaml` file with some example tags to demonstrate what this glossary might look like; however, please customize this for your own project.
+
+```{r load tags}
+TAGS <- yaml::read_yaml(here("script", "tags.yaml"))
+str(TAGS)
+```
+
+We demonstrate the benefit of using this tagging strategy when we construct run logs and summary tables later in this Expo on the {{< var pages.model_summary_stan >}} page. We also demonstrate different functions for interacting with tags below but see [`?modify_tags`](https://metrumresearchgroup.github.io/bbr/reference/modify_tags.html) for details on each of these functions.
+
+
+#### Auto-complete for tags
+
+Predefining your tags and reading them into a named list, as shown above, allows you to use Rstudio's auto-complete feature. By typing `TAGS$`, you can see all available tags and when you start typing part of the tag, the list will actively filter the list to relevant tags. For instance, try typing `TAGS$eta` in the console to view the relevant tags with "eta" in them.
+
+
+#### Add tags to your model
+
+Here we add a few relevant tags to this first model: one denoting the non-centered parameterization and one denoting the model as having a sigmoidal Emax structure.
+
+```{r}
+mod0 <- mod0 %>%
+  add_tags(c(
+    TAGS$NCP,
+    TAGS$Emax4
+  ))
+```
+
+Now, when you print your model object (`mod0`) to the console, or when you call `run_log()` (described later), you'll see your new tags. You can also see these tags persist in the YAML file on disk.
+
+```{r}
+cat(readLines(file.path(MODEL_DIR, "mod0.yaml")), sep = "\n")
+```
+
+## Submitting a model
+
+Now that you have your model object, you can submit it to run with `bbr::submit_model()`.
+
+```{r, eval = TRUE}
+fit0 <- submit_model(mod0)
+```
+
+
+
+
+The `submit_model` function will compile the Stan model and run the MCMC sampler, return a `CmdStanMCMC` object, and write the MCMC samples to the `<run>/<run>-output` directory as csv files (one per chain). In addition, `submit_model` saves an RDS file containing all of the CmdStanMCMC object elements _except_ the samples.
+
+We can look at some simple summaries working directly with the CmdStanMCMC object. For example, the `cmdstan_diagnose` slot provides a quick assessment of model diagnostics,
+
+```{r}
+fit0$cmdstan_diagnose()
+```
+
+and the `summary` slot provides a quick summary of the parameter distributions, split Rhat and effective sample sizes:
+
+```{r}
+fit0$summary(variables=c('tv_e0','tv_log_ec50','emax','gamma',
+                         'omega_e0','omega_log_ec50','sigma')) %>% 
+  mutate(across(-variable,  pmtables::sig))
+```
+
+Finally, let's add a note documenting our initial assessment of MCMC convergence.
+
+```{r, eval = TRUE}
+mod0 <- mod0 %>% 
+  add_notes("Initial assessment of convergence based on R-hat looks good.")
+```
+
+# Other resources
+ <hr /> 
+ 
+The following script from the {{< var stan_expo_repo.main >}} is discussed on this page. If you're interested running this code, visit the {{< var pages.about_the_repo >}} page first.
+
+Initial Model Submission script: {{< var stan_expo_repo.init_model_submission >}} 

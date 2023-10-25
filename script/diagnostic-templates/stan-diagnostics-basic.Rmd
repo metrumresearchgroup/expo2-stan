@@ -1,0 +1,99 @@
+---
+title: "Stan basic model diagnostics report"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    depth: 2
+params:
+  mod: NULL # bbr-Stan model
+  pars: NULL # character vector of parameter names to plot
+  n_per_page: 4
+  np: NULL
+  myTheme: !r theme(text = element_text(size = 12), axis.text = element_text(size = 10))
+  include_plots: TRUE
+  include_code: FALSE
+  run_mrggsave: FALSE
+  fig_dir: !r here::here("deliv", "figure")
+---
+
+# Purpose
+
+Collection of basic Stan model diagnostics displayed as a HTML file.
+
+
+```{r setup_params, echo = FALSE}
+library(bbr)
+library(bbr.bayes)
+library(posterior)
+
+.posterior <- as_draws(params$mod)
+modelName <- get_model_id(params$mod)
+
+n_per_page <- params$n_per_page
+np <- params$np
+myTheme <- params$myTheme
+
+# subset to requested params
+pars <- params$pars
+.posterior <- .posterior[, , pars]
+
+nSamp <- dim(.posterior)[1]
+nChains <- dim(.posterior)[2]
+
+```
+
+
+
+```{r makeDir_mrggsave, echo = FALSE, eval = params$run_mrggsave}
+library(mrggsave)
+thisFigDir <- file.path(params$fig_dir, modelName)
+if(!file.exists(thisFigDir)) dir.create(thisFigDir)
+### set mrggsave figure directory here and tell R whether you want the pdf,
+## the png or both (e.g.,  mrggsave.dev = "pdf,png")
+options(
+  mrggsave.dir = thisFigDir, 
+  mrg.script = "mcmc-diagnostics.Rmd",
+  mrggsave.dev = "png"
+)
+```
+
+```{r print_model_object, echo = FALSE, results = "asis"}
+cat("## ", modelName)
+check_up_to_date(params$mod)
+params$mod
+```
+
+# Parameter summaries
+
+```{r echo = params$include_code, results = "asis"}
+# could potentially pass in args to this via params$
+summarize_draws(.posterior) %>% knitr::kable()
+```
+
+# loo
+
+```{r echo = params$include_code}
+read_fit_model(params$mod)$loo()
+```
+
+
+# Predictive checks
+
+_add any predictive check code you may want to include..._
+
+```{r echo = params$include_code}
+## make plot here and assign it to a var like
+# myplot <- ...
+```
+```{r eval = params$include_plots, include = params$include_plots, echo = F, message = FALSE}
+## show plot in HTML output
+# myplot
+```
+
+```{r save_rhat_plot, include = FALSE, eval = params$run_mrggsave, message = FALSE}
+## save plots to disk
+# plotName <- "myplot"
+# mrggsave(myplot, 
+#          stem = "{modelName}-{plotName}")
+```

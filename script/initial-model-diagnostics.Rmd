@@ -1,0 +1,341 @@
+---
+title: "Stan Model Diagnostics"
+subtitle: > 
+  Example model diagnostics and posterior predictive checks with <font class=mrgc>bbr.bayes</font>.
+image: bbr-strip.png
+order: 500
+categories: 
+- bbr
+- model management
+fig-cap-location: margin
+title-block-banner: "#16b1bf"
+title-block-banner-color: "white"
+toc: true
+toc-depth: 2
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE, 
+  cache = TRUE, 
+  autodep = TRUE, 
+  comment = '.', 
+  message = FALSE,
+  warning = FALSE
+)
+```
+
+
+# Introduction
+
+This page demonstrates the following steps in a Bayesian workflow:
+
+* Evaluating MCMC convergence diagnostics
+* Posterior predictive checks
+
+There is no explicit functionality in `bbr.bayes` to perform these steps; however, the output from `bbr.bayes` makes these steps relatively simple.
+
+# Tools used
+
+<hr />
+
+## MetrumRG packages
+{{< var used.bbr >}}
+
+## CRAN packages
+{{< var used.dplyr >}}
+{{< var used.bayesplot >}}
+{{< var used.tidybayes >}}
+{{< var used.posterior >}}
+{{< var used.tidyvpc >}}
+
+
+# Set up
+
+<hr />
+
+Load required packages and set file paths to your model and figure directories. 
+
+```{r}
+library(bbr)
+library(bbr.bayes)
+library(dplyr)
+library(here)
+library(tidyverse)
+library(tidybayes)
+library(yspec)
+library(tidyvpc)
+library(bayesplot)
+
+MODEL_DIR <- here("model", "stan","expo")
+FIGURE_DIR <- here("deliv", "figure","expo")
+
+bayesplot::color_scheme_set('viridis')
+theme_set(theme_bw())
+
+
+```
+
+```{r, echo=FALSE}
+
+# Source some useful functions
+source(here("script", "functions-model.R"))
+
+# define model dir and load tags
+TAGS <- yaml::read_yaml(here("script", "tags.yaml"))
+
+```
+
+```{r, eval = TRUE, echo=FALSE, include = FALSE}
+#Source helper functions for stepping through the rmd files 
+source(here::here("script", "functions-rmd-helpers.R"))
+
+#models needed for this script
+models <- c("mod0")
+
+for (i in 1:length(models)){
+  mod_i <- check_model(file.path(MODEL_DIR, models[i]))
+}
+
+```
+
+
+# MCMC diagnostics
+
+After fitting the model, we examine a suite of MCMC diagnostics to see if there is anything clearly amiss with the sampling. We'll focus on split R-hat, bulk and tail ESS, trace plots, and density plots. If any of these raise a flag about convergence, then additional diagnostics would be examined.
+
+```{r}
+mod0 <- read_model(file.path(MODEL_DIR, 'mod0'))
+fit0 <- read_fit_model(mod0)
+
+fit0$summary(variables=c('tv_e0','tv_ec50','emax','gamma', 'omega_e0','omega_log_ec50')) %>% 
+  mutate(across(-variable, pmtables::sig))
+```
+
+For the population-level parameters, the R-hat values are all below 1.01 and ESS bulk and tail values are relatively large. Similarly, all of the individual-level parameters have low R-hat values:
+
+```{r}
+fit0$summary(variables=c('e0','ec50')) %>% 
+  mutate(across(-variable, pmtables::sig)) %>% 
+  arrange(desc(rhat)) %>% 
+  print(n=10)
+```
+
+
+Next, we'll look at the trace and density plots. Based on the R-hat values, we wouldn't expect these plots to show any problems with the MCMC sampling.
+
+```{r}
+trace0 <- bayesplot::mcmc_trace(fit0$draws(), 
+                                pars=c('tv_e0','tv_ec50','emax','gamma', 
+                                       'omega_e0','omega_log_ec50'))
+```
+
+
+```{r}
+#| label: fig-trace-mod0
+#| fig-cap: MCMC trace plots for model 0.
+#| out-width: 100%
+trace0
+```
+
+
+
+```{r}
+density0 <- mcmc_dens_overlay(fit0$draws(), 
+                      pars=c('tv_e0','tv_ec50','emax','gamma', 
+                             'omega_e0','omega_log_ec50'))
+```
+
+```{r}
+#| label: fig-density-mod0
+#| fig-cap: MCMC density plots.
+#| out-width: 100%
+density0
+```
+
+A scatterplot of the MCMC draws can be useful in showing bivariate relationships in the posterior distribution. The default scatterplot generated with `mcmc_pairs` uses points for the off-diagonal panels and histograms along the diagonal.
+
+```{r}
+mcmc_pairs(fit0$draws(), 
+           pars=c('tv_e0','tv_ec50','emax','gamma', 
+                  'omega_e0','omega_log_ec50'))
+```
+
+A more informative plot might use density estimates and transformations to bounded parameters. We can make these modifications using the `diag_fun`, `off_diag_fun`, and `transformations` arguments:
+
+```{r}
+mcmc_pairs(fit0$draws(), 
+           pars=c('tv_e0','tv_ec50','emax',
+                  'gamma', 'omega_e0','omega_log_ec50'),
+           transformations = list(`tv_ec50`='log', 
+                                  emax=function(x) qlogis(x/100), 
+                                  gamma='log', 
+                                  `omega_e0`='log',
+                                  `omega_log_ec50`='log'),
+           diag_fun = 'dens',
+           off_diag_fun = 'hex')
+```
+
+In general, the MCMC diagnostics look good with low R-hat values, high ESS values, and no red flags in the trace, density, or scatter plots.
+
+
+##  Model evaluation - Posterior Predictive Checks
+
+A posterior predictive check (PPC) compares summary statistics from the observed data to the posterior predictive distribution for the same statistics from the model. Recall, the `generated quantities` block was used to simulate data from the posterior predictive distribution:
+
+```{r, echo=FALSE}
+code0 <- fit0$code()
+gq <- code0[grep('generated quantities',code0): length(code0)]
+```
+
+```{r, echo=FALSE}
+cat(gq, sep='\n')
+```
+
+
+First, we'll read the data and data specification (for help with labeling the plots).
+
+```{r}
+exdata3 <- read_csv(here('data','derived','exdata3.csv'), na='.')
+
+spec <- load_spec(here('data','derived','exdata3.yml'))
+
+exdata3 <- ys_add_factors(exdata3, spec)
+
+ind_exdata3 <- distinct(exdata3, ID, .keep_all = TRUE)
+
+labs <- ys_get_short_unit(spec)
+```
+
+
+To help generate the plots in a reasonable amount of time, we'll use a subset of 500 posterior samples. In practice, we would use all of the posterior samples.
+
+## FXa vs concentration
+
+Our first PPC will look at the median, 5th, and 95th percentiles of the distribution of FXa inhibition as a function of drug concentration.
+
+We'll use the `tidybayes::spread_draws` function to extract and shape the posterior samples into a form that's helpful for making the PPC plots and join the observed data primarily for the corresponding drug concentrations.
+
+```{r}
+ppc <- spread_draws(fit0, simdv_obs[num], simdv_new[num],
+                    ndraws = 500,seed = 9753)
+```
+
+```{r}
+head(ppc)
+```
+
+```{r}
+ppc2 <- left_join(ppc, exdata3 %>% mutate(num=1:n()))
+```
+
+With the observed and simulated data in-hand, we can use the `tidyvpc` package to make the plot for us.
+
+```{r}
+vpc_conc <- observed(exdata3, x=cobs, y=fxa.inh) %>% 
+  simulated(ppc2 %>% arrange(.draw,num), y=simdv_new) %>% 
+  stratify(~dose) %>% 
+  binning(bin='jenks', nbins=10) %>% 
+  vpcstats()
+```
+
+```{r}
+plot(vpc_conc, legend.position = 'right')
+```
+
+Based on this plot, the model appears to be capturing the relationship between FXa inhibition and drug concentration adequately.
+
+## FXa inhibition vs time by dose (median, 5th, 95th percentiles)
+
+Because time was not explicitly accounted for in our model, we might also be interested in understanding whether the model adequately describes the relationship between FXa inhibition and time. We'll look at this relationship stratified by dose because of the large differences in FXa inhibition across doses.  
+
+Because the samples were obtained at a fixed grid of times, we'll use these nominal times as our binning variable.
+
+
+```{r}
+vpc_time <- observed(exdata3, x=time, y=fxa.inh) %>% 
+  simulated(ppc2 %>% arrange(.draw,num), y=simdv_new) %>% 
+  stratify(~dose) %>% 
+  binning(bin=time) %>% 
+  vpcstats()
+```
+
+```{r}
+plot(vpc_time, legend.position='right')
+```
+
+The model captures the relationship between FXa inhibition and time.
+
+
+## Correlation between baseline and post-baseline FXa inhibition
+
+Lastly, we may be interested in how the model captures changes within individuals. To that end, let's look at the observed relationship between baseline and post-baseline FXa inhibition stratified by time after dose:
+
+```{r, echo=FALSE}
+exdata3 %>% 
+  ungroup() %>% 
+  filter(time > 0) %>% 
+  left_join(exdata3 %>% filter(time==0) %>% ungroup() %>% select(ID, bsl=fxa.inh)) %>% 
+  ggplot(aes(x=bsl, y=fxa.inh)) +
+  geom_point()  + 
+  facet_wrap(~time) + 
+  geom_smooth() +
+  labs(x=paste('Baseline',labs$fxa.inh), y=labs$fxa.inh)
+```
+
+There appears to be a moderate-negative correlation across all of the time points. Let's see whether the model is able to capture these correlations.
+
+
+```{r}
+obs_correlations <- exdata3 %>% 
+  ungroup() %>% 
+  filter(time > 0) %>% 
+  left_join(exdata3 %>% 
+              filter(time==0) %>% 
+              ungroup() %>% 
+              select(ID, bsl=fxa.inh)) %>% 
+  group_by(time) %>% 
+  summarise(cor=cor(bsl,fxa.inh))
+```
+
+
+```{r}
+sim_correlations <- ppc2 %>% 
+  ungroup() %>% 
+  filter(time > 0) %>% 
+  left_join(ppc2 %>% 
+              filter(time==0) %>% 
+              ungroup() %>% 
+              select(.draw,ID, bsl=simdv_new)) %>% 
+  group_by(.draw,time) %>% 
+  summarise(cor=cor(bsl,simdv_new)) %>% 
+  group_by(time) %>% 
+  summarize(median=median(cor),
+           qlo = quantile(cor, prob=0.05),
+           qhi = quantile(cor, prob=0.95))
+
+```
+
+```{r}
+sim_correlations %>% 
+  ggplot(aes(x=factor(time), y=median)) +
+  geom_pointrange(aes(ymin=qlo, ymax=qhi)) +
+  geom_point(data=obs_correlations, aes(y=cor), col='red') +
+  labs(x=labs$time, y='Correlation')
+```
+
+Let's add a note describing this observation.
+
+```{r}
+mod0 <- mod0 %>% 
+  add_notes("Model does not capture within subject relationship between baseline and post-baseline observations.")
+```
+
+Recall, the model assumes the individual baseline and EC50 are uncorrelated and that the residual errors are independent. Thus, it's not surprising that the model isn't capturing this relationship.
+
+# Other resources
+ <hr /> 
+ 
+The following script from the {{< var stan_expo_repo.main >}} is discussed on this page. If you're interested running this code, visit the {{< var pages.about_the_repo >}} page first.
+
+Stan Model Diagnostics script: {{< var stan_expo_repo.init_model_diag >}}

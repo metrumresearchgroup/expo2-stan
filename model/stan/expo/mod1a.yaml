@@ -1,0 +1,3 @@
+model_type: stan
+based_on:
+- mod1

@@ -1,0 +1,4 @@
+model_type: stan_gq
+based_on:
+- mod4
+gq_parent: mod4

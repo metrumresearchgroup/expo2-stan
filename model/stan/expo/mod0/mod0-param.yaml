@@ -1,0 +1,48 @@
+Emax:
+  name: emax
+  abb: $\theta_3$
+  desc: Maximal FXa inhibition
+  trans: none
+  panel: struct
+  
+ED50:
+  name: tv_ec50
+  abb: $\exp(\theta_2)$
+  desc: Concentration yielding half of the maximal effect
+  trans: none
+  panel: struct
+
+E0:
+  name: tv_e0
+  abb: $\theta_1$
+  desc: Baseline FXa inhibition
+  trans: none
+  panel: struct
+
+Sigma:
+  name: sigma
+  abb: $\sigma$
+  desc: Residual standard deviation
+  trans: none
+  panel: RUV
+
+Omega1:
+  name: omega_e0
+  abb: $\omega_1$
+  desc: IIV standard deviation for baseline FXa inhibition
+  trans: none
+  panel: struct
+
+Omega2:
+  name: omega_tv_ec50
+  abb: $\omega_2$
+  desc: IIV standard deviation for EC50
+  trans: none
+  panel: struct
+
+gamma:
+   name: gamma
+   abb: $\gamma$
+   desc: Hill parameter
+  trans: none
+  panel: struct

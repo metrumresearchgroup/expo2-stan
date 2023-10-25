@@ -1,0 +1,4 @@
+model_type: stan
+based_on:
+- mod2
+description: Add effect of sex on E0 and EC50.

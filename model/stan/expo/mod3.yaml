@@ -1,0 +1,5 @@
+model_type: stan
+based_on:
+- mod2
+notes:
+- Log-transformed model with limit of quantification

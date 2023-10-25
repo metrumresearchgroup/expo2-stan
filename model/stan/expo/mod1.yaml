@@ -1,0 +1,12 @@
+model_type: stan
+based_on:
+- mod0
+description: Add correlation between subject-specific e0 and ec50
+notes:
+- Model 0 with correlated random effects.
+- Poor mixing for omega_sds[2], the between-subject standard deviation on e0.  Try
+  reparameterizing the model.
+tags:
+- ETA-E0
+- ETA-EC50
+- Correlated random effects
